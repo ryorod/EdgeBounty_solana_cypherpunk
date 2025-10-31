@@ -1,0 +1,395 @@
+openapi: 3.0.3
+info:
+  title: Edge Bounty MVP API
+  version: "0.1.0"
+  description: |
+    Node/Express REST API for the Edge Bounty MVP.
+    - Android workers run on-device CLIP embeddings.
+    - Server assigns jobs, verifies r=3 consensus, settles on Solana devnet.
+servers:
+  - url: http://localhost:4000
+    description: Local development
+
+tags:
+  - name: Jobs
+  - name: Worker
+  - name: Results
+
+paths:
+  /jobs:
+    post:
+      tags: [Jobs]
+      summary: Create a job
+      operationId: createJob
+      # Example (curl):
+      # curl -X POST http://localhost:4000/jobs -H "Content-Type: application/json" -d '{
+      #   "id":"1719990000000",
+      #   "model_id":"clip-vit-b32",
+      #   "model_hash":"demo-model-hash",
+      #   "input_uri":"ipfs://demo",
+      #   "input_hash":"b3:abcd...",
+      #   "redundancy":3,
+      #   "reward_usdc":"0.25",
+      #   "deadline_ms":6000,
+      #   "is_canary":false
+      # }'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Job"
+            example:
+              id: "1719990000000"
+              model_id: "clip-vit-b32"
+              model_hash: "demo-model-hash"
+              input_uri: "ipfs://demo"
+              input_hash: "b3:abcd..."
+              redundancy: 3
+              reward_usdc: "0.25"
+              deadline_ms: 6000
+              is_canary: false
+      responses:
+        "200":
+          description: Job created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+              example:
+                id: "1719990000000"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+    get:
+      tags: [Jobs]
+      summary: List recent jobs
+      operationId: listJobs
+      # Example (curl):
+      # curl http://localhost:4000/jobs
+      responses:
+        "200":
+          description: Array of jobs (most recent first)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Job"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /claim:
+    post:
+      tags: [Worker]
+      summary: Claim an assignment for a worker
+      operationId: claimJob
+      # Example (curl):
+      # curl -X POST http://localhost:4000/claim -H "Content-Type: application/json" -d '{
+      #   "worker_pubkey": "So11111111111111111111111111111111111111112",
+      #   "capabilities": { "model": "clip-vit-b32" }
+      # }'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [worker_pubkey]
+              properties:
+                worker_pubkey:
+                  type: string
+                  description: Base58 pubkey (Solana)
+                capabilities:
+                  type: object
+                  additionalProperties: true
+            example:
+              worker_pubkey: "So11111111111111111111111111111111111111112"
+              capabilities: { model: "clip-vit-b32" }
+      responses:
+        "200":
+          description: Assignment returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Assignment"
+              example:
+                assignment:
+                  job:
+                    id: "1719990000000"
+                    model_id: "clip-vit-b32"
+                    model_hash: "demo-model-hash"
+                    input_uri: "ipfs://demo"
+                    input_hash: "b3:abcd..."
+                    redundancy: 3
+                    reward_usdc: "0.25"
+                    deadline_ms: 6000
+                    is_canary: false
+                    created_at: 1719990000000
+        "204":
+          description: No assignments available
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /submit:
+    post:
+      tags: [Worker]
+      summary: Submit an embedding + proof for a job
+      operationId: submitResult
+      # Example (curl):
+      # curl -X POST http://localhost:4000/submit -H "Content-Type: application/json" -d '{
+      #   "job_id":"1719990000000",
+      #   "worker_pubkey":"So11111111111111111111111111111111111111112",
+      #   "embedding":[0.01, 0.02, ...],
+      #   "latency_ms":1420,
+      #   "exec_env":"CPU",
+      #   "proof":{
+      #     "device_sig":"base64signature...",
+      #     "model_hash":"demo-model-hash",
+      #     "input_hash":"b3:abcd...",
+      #     "battery":92,
+      #     "temp_c":35.2
+      #   },
+      #   "proof_cbor_b64":"base64cbor..."
+      # }'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitPayload"
+      responses:
+        "200":
+          description: Submission accepted; may be pending or consensus reached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmitResponse"
+              examples:
+                pending:
+                  summary: Pending (waiting for r=3)
+                  value: { status: "pending" }
+                consensus:
+                  summary: Consensus reached
+                  value:
+                    status: "consensus"
+                    ipfs: "http://localhost:4000/result_1720000000000.json"
+                    tx: "5Qn...devnetTxSig"
+                    memoSig: "3Ms...memoTxSig"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /results:
+    get:
+      tags: [Results]
+      summary: List consensus results
+      operationId: listResults
+      # Example (curl):
+      # curl http://localhost:4000/results
+      responses:
+        "200":
+          description: Array of consensus results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Result"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+components:
+  schemas:
+    Job:
+      type: object
+      description: A single embedding job definition
+      properties:
+        id:
+          type: string
+          description: Job identifier (stringified timestamp or UUID)
+        model_id:
+          type: string
+          example: clip-vit-b32
+        model_hash:
+          type: string
+          description: Hash of the model binary used
+        input_uri:
+          type: string
+          description: Location of the input (ipfs:// or https://)
+        input_hash:
+          type: string
+          description: Hash of the raw input bytes
+        redundancy:
+          type: integer
+          description: r (number of redundant assignments)
+          example: 3
+        reward_usdc:
+          type: string
+          description: Reward per worker (string to avoid float issues)
+          example: "0.25"
+        deadline_ms:
+          type: integer
+          description: Deadline for completion in milliseconds
+          example: 6000
+        is_canary:
+          type: boolean
+          default: false
+        created_at:
+          type: integer
+          readOnly: true
+          description: Server-set epoch millis
+      required: [model_id, model_hash, input_hash, redundancy, reward_usdc, deadline_ms]
+
+    Assignment:
+      type: object
+      properties:
+        assignment:
+          type: object
+          properties:
+            job:
+              $ref: "#/components/schemas/Job"
+          required: [job]
+      required: [assignment]
+
+    SubmitPayload:
+      type: object
+      properties:
+        job_id:
+          type: string
+        worker_pubkey:
+          type: string
+          description: Base58 Solana pubkey
+        embedding:
+          type: array
+          items: { type: number }
+          description: L2-normalized embedding vector
+        latency_ms:
+          type: integer
+        exec_env:
+          type: string
+          enum: [CPU, GPU, NPU]
+        proof:
+          type: object
+          properties:
+            device_sig: { type: string, description: Base64 Ed25519 signature over CBOR proof }
+            model_hash: { type: string }
+            input_hash: { type: string }
+            battery: { type: integer }
+            temp_c: { type: number }
+          required: [device_sig, model_hash, input_hash, battery, temp_c]
+        proof_cbor_b64:
+          type: string
+          description: Optional CBOR-encoded proof (base64)
+      required: [job_id, worker_pubkey, embedding, latency_ms, exec_env, proof]
+
+    SubmitResponse:
+      type: object
+      description: Union of pending or consensus responses
+      properties:
+        status:
+          type: string
+          enum: [pending, consensus]
+        ipfs:
+          type: string
+          nullable: true
+          description: Result meta JSON URI (present on consensus)
+        tx:
+          type: string
+          nullable: true
+          description: SPL token payout TX signature (present on consensus)
+        memoSig:
+          type: string
+          nullable: true
+          description: Memo TX signature with result URI (present on consensus)
+      required: [status]
+
+    Result:
+      type: object
+      properties:
+        job_id:
+          type: string
+        agree:
+          type: integer
+          description: Number of agreeing pairs (max 3)
+          example: 3
+        k:
+          type: integer
+          description: Redundancy r
+          example: 3
+        cosine_min:
+          type: number
+          description: Minimum cosine across the three pairs
+          example: 0.982
+        ipfs_uri:
+          type: string
+          description: Result meta JSON URI
+        tx_sig:
+          type: string
+          description: Payout TX signature
+        created_at:
+          type: integer
+          description: Epoch millis
+      required: [job_id, agree, k, cosine_min, ipfs_uri, tx_sig, created_at]
+
+    WorkerScore:
+      type: object
+      properties:
+        pubkey:
+          type: string
+        score:
+          type: number
+          description: 0–100 reputation score
+          example: 97.5
+      required: [pubkey, score]
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Short error message
+        code:
+          type: string
+          description: Optional machine-readable code
+        details:
+          type: object
+          additionalProperties: true
+      required: [error]
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "invalid_request"
+            code: "BAD_REQUEST"
+            details: { field: "embedding", reason: "missing" }
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "not_found"
+            code: "NOT_FOUND"
+    ServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "internal_error"
+            code: "SERVER_ERROR"
